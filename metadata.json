@@ -1,0 +1,6 @@
+{
+  "name": "Coherence Mission Control",
+  "description": "Autonomic regulatory clinician cockpit utilizing the 10-Engine Cortex sequence and 17-Node Genome laws.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

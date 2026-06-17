@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Pillar 1)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Helper Functions ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      // For sandbox environment usability, we look at the verified email status
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'anonymous');
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(ownerId) {
+      return isSignedIn() && request.auth.uid == ownerId;
+    }
+
+    // --- Entity Specific Validators (Pillar 2 - Anti-Update-Gap) ---
+    function isValidUser(data) {
+      return data.keys().hasAll(['userId', 'email', 'name', 'createdAt'])
+        && data.keys().size() == 4
+        && data.userId is string && data.userId.size() <= 128
+        && data.email is string && data.email.size() <= 200
+        && data.name is string && data.name.size() <= 200
+        && data.createdAt is timestamp;
+    }
+
+    function isValidEncounter(data) {
+      return data.keys().hasAll([
+        'id', 'ownerId', 'patientName', 'patientDob', 'preVisitIntake',
+        'currentEngine', 'maxVisitedEngine', 'observations', 'activeOverrides',
+        'notes', 'heartRate', 'hrv', 'swayIndex', 'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().size() == 16
+        && data.id is string && data.id.size() <= 128
+        && data.ownerId is string && data.ownerId.size() <= 128
+        && data.patientName is string && data.patientName.size() <= 200
+        && data.patientDob is string && data.patientDob.size() <= 50
+        && data.preVisitIntake is string && data.preVisitIntake.size() <= 4000
+        && data.currentEngine is int && data.currentEngine >= 1 && data.currentEngine <= 10
+        && data.maxVisitedEngine is int && data.maxVisitedEngine >= 1 && data.maxVisitedEngine <= 10
+        && data.observations is list && data.observations.size() <= 100
+        && data.activeOverrides is list && data.activeOverrides.size() <= 10
+        && data.notes is string && data.notes.size() <= 4000
+        && data.heartRate is int && data.heartRate >= 0 && data.heartRate <= 300
+        && data.hrv is int && data.hrv >= 0 && data.hrv <= 500
+        && data.swayIndex is number && data.swayIndex >= 0.0 && data.swayIndex <= 100.0
+        && data.status is string && (data.status == 'active' || data.status == 'completed')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Matching and Rules ---
+
+    // Test Connection Collection
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().createdAt == request.time;
+      allow update: if isOwner(userId) && isValidUser(incoming()) 
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if false; // User profiles are permanent
+    }
+
+    // Encounters Collection
+    match /encounters/{encounterId} {
+      // Secure List and Get Queries (Pillar 8 - Enforces query context on server-side)
+      allow read: if isSignedIn() && (resource == null || !('ownerId' in resource.data) || resource.data.ownerId == request.auth.uid);
+      
+      // Clinical Creation Gate
+      allow create: if isSignedIn() && isValidId(encounterId) && incoming().id == encounterId
+        && isOwner(incoming().ownerId)
+        && isValidEncounter(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+        
+      // Action/Tiered Update Gate with Terminal State Locking
+      allow update: if isSignedIn() && isValidId(encounterId)
+        && isOwner(existing().ownerId)
+        && isOwner(incoming().ownerId)
+        && isValidEncounter(incoming())
+        // Immutable Field Checks (Pillar 12)
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        // Strict System Timestamps (Pillar 13)
+        && incoming().updatedAt == request.time
+        // Terminal State Lock (Pillar 6) — No updates are allowed after a session is finalized
+        && existing().status != 'completed';
+        
+      allow delete: if isSignedIn() && isOwner(resource.data.ownerId) && resource.data.status != 'completed';
+    }
+  }
+}

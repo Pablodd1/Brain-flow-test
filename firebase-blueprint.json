@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Clinician user profile",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The unique Firebase Auth UID" },
+        "email": { "type": "string", "description": "Clinician email address" },
+        "name": { "type": "string", "description": "Clinician full name" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Registration time" }
+      },
+      "required": ["userId", "email", "name", "createdAt"]
+    },
+    "Encounter": {
+      "title": "Encounter",
+      "description": "A clinical patient encounter session managed via the 10-Engine Cortex cockpit.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique encounter ID" },
+        "ownerId": { "type": "string", "description": "Clinician user ID who created the encounter" },
+        "patientName": { "type": "string", "description": "Patient's full name" },
+        "patientDob": { "type": "string", "description": "Patient's date of birth" },
+        "preVisitIntake": { "type": "string", "description": "Pre-visit self-reported intake symptoms" },
+        "currentEngine": { "type": "integer", "description": "Current active Cortex scale state (1-10)" },
+        "maxVisitedEngine": { "type": "integer", "description": "Highest Cortex engine state unlocked in session" },
+        "observations": { "type": "array", "description": "Captured clinical observations. Needs at least 3 to pass general screening." },
+        "activeOverrides": { "type": "array", "description": "Currently activated Cortex clinical override system identifiers." },
+        "notes": { "type": "string", "description": "Clinical progression or session outcome notes" },
+        "heartRate": { "type": "integer", "description": "Active dynamic reading of patient's Heart Rate" },
+        "hrv": { "type": "integer", "description": "Active dynamic reading of Heart Rate Variability in ms" },
+        "swayIndex": { "type": "number", "description": "Active dynamic balance body sway index" },
+        "status": { "type": "string", "enum": ["active", "completed"], "description": "Terminal session state" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Encounter start time" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last save state time" }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "patientName",
+        "currentEngine",
+        "observations",
+        "activeOverrides",
+        "heartRate",
+        "hrv",
+        "swayIndex",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Store signed-in clinicians and profiles"
+    },
+    "encounters/{encounterId}": {
+      "schema": "Encounter",
+      "description": "Store Coherence clinical encounter sessions and live sensor metrics data"
+    }
+  }
+}
