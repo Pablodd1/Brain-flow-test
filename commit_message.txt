@@ -1,0 +1,5 @@
+🧪 Add tests for HistoricEncounters component
+
+What: Add missing unit tests for the HistoricEncounters.tsx file.
+Coverage: Tests were written to ensure rendering, empty states, session date formatting, patient search functionality, single item selection, New Encounter creation, Barcode Intake, and compare sessions dock station (selection limit check and launch comparison button behaviour).
+Result: Code coverage and reliability increased significantly since all user interactions and rendering conditions for the HistoricEncounters component are now covered by Vitest/testing-library tests.
