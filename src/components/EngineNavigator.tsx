@@ -80,12 +80,13 @@ export default function EngineNavigator({
       };
 
       recognition.onresult = (event: any) => {
-        let transcript = '';
+        const transcriptParts = [];
         for (let i = event.resultIndex; i < event.results.length; i++) {
           if (event.results[i].isFinal) {
-            transcript += event.results[i][0].transcript;
+            transcriptParts.push(event.results[i][0].transcript);
           }
         }
+        const transcript = transcriptParts.join('');
         if (transcript) {
           onUpdateEncounter({
             notes: encounter.notes ? `${encounter.notes} ${transcript.trim()}` : transcript.trim()
