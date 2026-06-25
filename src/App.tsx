@@ -3,18 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { auth, db, handleFirestoreError } from './firebase';
-import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import React, { useState } from 'react';
 import { 
-  collection, doc, query, where, onSnapshot, orderBy, 
-  setDoc, updateDoc, deleteDoc, getDocFromServer, serverTimestamp
-} from 'firebase/firestore';
-import { 
-  ShieldAlert, Activity, LogOut, Loader2, Brain, Sparkles, 
-  FileText, ShieldCheck, Heart, User, Plus, Clock, HelpCircle, AlertTriangle
+  ShieldCheck, Loader2, AlertTriangle
 } from 'lucide-react';
-import { ClinicalEncounter, OverrideType, OperationType } from './types';
 import ClinicianAuth from './components/ClinicianAuth';
 import SensoryFeed from './components/SensoryFeed';
 import GenomeGrid from './components/GenomeGrid';
@@ -23,15 +15,32 @@ import HistoricEncounters from './components/HistoricEncounters';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
 import Dashboard from './components/Dashboard';
 
+// Extracted UI Components
+import AppHeader from './components/AppHeader';
+import CockpitEmptyState from './components/CockpitEmptyState';
+
+// Extracted State & Logic Hooks
+import { useAuth } from './hooks/useAuth';
+import { useEncounters } from './hooks/useEncounters';
+
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [authChecking, setAuthChecking] = useState(true);
-  const [encounters, setEncounters] = useState<ClinicalEncounter[]>([]);
-  const [activeEncounterId, setActiveEncounterId] = useState<string | null>(null);
+  const { currentUser, authChecking, setCurrentUser } = useAuth();
+  const {
+    encounters,
+    activeEncounterId,
+    setActiveEncounterId,
+    activeEncounter,
+    dbSaving,
+    syncStatus,
+    handleUpdateActiveEncounter,
+    handleToggleOverride,
+    handleMetricUpdate,
+    handleStartNewEncounter,
+    handleLockSession
+  } = useEncounters(currentUser);
+
   const [isConfidencePinned, setIsConfidencePinned] = useState(false);
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
-  const [dbSaving, setDbSaving] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'synced' | 'error'>('synced');
   const [activeView, setActiveView] = useState<'cockpit' | 'analytics'>('cockpit');
   const [compareIds, setCompareIds] = useState<string[]>([]);
 
@@ -48,197 +57,9 @@ export default function App() {
     });
   };
 
-  // Find active encounter object
-  const activeEncounter = encounters.find(e => e.id === activeEncounterId) || null;
-
-  // 1. Initial connection validate
-  useEffect(() => {
-    const testConnection = async () => {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration.");
-        }
-      }
-    };
-    testConnection();
-  }, []);
-
-  // 2. Track Firebase auth changes
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-      setAuthChecking(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // 3. Realtime listening to Clinician Encounters
-  useEffect(() => {
-    if (!currentUser) {
-      setEncounters([]);
-      setActiveEncounterId(null);
-      return;
-    }
-
-    const path = 'encounters';
-    const q = query(
-      collection(db, path),
-      where('ownerId', '==', currentUser.uid),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list: ClinicalEncounter[] = [];
-      snapshot.forEach((snapshotDoc) => {
-        const data = snapshotDoc.data();
-        list.push({
-          id: snapshotDoc.id,
-          ...data,
-          // Handle timestamps safely
-          createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : data.createdAt,
-          updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : data.updatedAt,
-        } as ClinicalEncounter);
-      });
-      setEncounters(list);
-      
-      // Auto-select the first encounter if none selected and list has item
-      if (list.length > 0 && !activeEncounterId) {
-        setActiveEncounterId(list[0].id);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
-    });
-
-    return () => unsubscribe();
-  }, [currentUser]);
-
-  // 4. Save encounter state changes directly to Cloud Firestore
-  const handleUpdateActiveEncounter = async (updates: Partial<ClinicalEncounter>) => {
-    if (!activeEncounterId || !currentUser) return;
-
-    // Reject updates on completed sessions to honor security policies
-    if (activeEncounter && activeEncounter.status === 'completed') {
-      alert('Clinical Safeguard: Completed clinical sessions are locked and cannot be restructured.');
-      return;
-    }
-
-    setSyncStatus('saving');
-    const path = `encounters/${activeEncounterId}`;
-    try {
-      const docRef = doc(db, 'encounters', activeEncounterId);
-      await updateDoc(docRef, {
-        ...updates,
-        updatedAt: serverTimestamp()
-      });
-      setSyncStatus('synced');
-    } catch (err) {
-      setSyncStatus('error');
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  };
-
-  // 5. Toggle Overrides
-  const handleToggleOverride = (type: OverrideType) => {
-    if (!activeEncounter) return;
-    let updated: OverrideType[] = [...activeEncounter.activeOverrides];
-    if (updated.includes(type)) {
-      updated = updated.filter(o => o !== type);
-    } else {
-      updated.push(type);
-    }
-    handleUpdateActiveEncounter({ activeOverrides: updated });
-  };
-
-  // 6. Clinician metric feed updater
-  const handleMetricUpdate = (metrics: { heartRate: number; hrv: number; swayIndex: number }) => {
-    if (!activeEncounter || activeEncounter.status === 'completed') return;
-    // Debounce updates by only saving to database occasionally or keeping it local
-    // For this full-stack proof we keep the real-time simulation reactive in local variables, and save occasionally
-    handleUpdateActiveEncounter({
-      heartRate: metrics.heartRate,
-      hrv: metrics.hrv,
-      swayIndex: metrics.swayIndex
-    });
-  };
-
-  // 7. Initialize a new clinical encounter session
-  const handleStartNewEncounter = async (barcodePatient?: any) => {
-    if (!currentUser) return;
-
-    setDbSaving(true);
-    const newId = 'enc_' + Math.random().toString(36).substring(2, 11);
-    const path = `encounters/${newId}`;
-
-    // Standard clinical defaults
-    let patientName = "EHR Patient Outline";
-    let preVisitIntake = "Patient requests autonomic and neuro-somatic screening.";
-    let patientDob = "1994-01-01";
-    let initialObs: string[] = [];
-
-    if (barcodePatient) {
-      patientName = barcodePatient.name;
-      patientDob = barcodePatient.dob;
-      preVisitIntake = barcodePatient.intake;
-      initialObs = barcodePatient.observations || [];
-    }
-
-    const newEncPayload = {
-      id: newId,
-      ownerId: currentUser.uid,
-      patientName,
-      patientDob,
-      preVisitIntake,
-      currentEngine: 1,
-      maxVisitedEngine: 1,
-      observations: initialObs,
-      activeOverrides: [],
-      notes: '',
-      heartRate: 72,
-      hrv: 48,
-      swayIndex: 2.1,
-      status: 'active',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    };
-
-    try {
-      await setDoc(doc(db, 'encounters', newId), newEncPayload);
-      setActiveEncounterId(newId);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    } finally {
-      setDbSaving(false);
-    }
-  };
-
   const handleBarcodeScanComplete = async (patient: any) => {
     setShowBarcodeScanner(false);
     await handleStartNewEncounter(patient);
-  };
-
-  // 8. Meaning Engine Session Lockdown
-  const handleLockSession = async () => {
-    if (!activeEncounterId) return;
-    setDbSaving(true);
-    const path = `encounters/${activeEncounterId}`;
-    try {
-      const docRef = doc(db, 'encounters', activeEncounterId);
-      await updateDoc(docRef, {
-        status: 'completed',
-        updatedAt: serverTimestamp()
-      });
-      alert('Secure Storage Archive Synced: This somatic encounter lock is active.');
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    } finally {
-      setDbSaving(false);
-    }
-  };
-
-  const handleSignOut = () => {
-    signOut(auth);
   };
 
   if (authChecking) {
@@ -278,80 +99,12 @@ export default function App() {
         </div>
       )}
 
-      {/* Header Bio Rail */}
-      <header className="bg-slate-950/80 border-b border-slate-800 xl:px-8 px-6 py-4 sticky top-0 z-30 backdrop-blur-md" id="control-panel-header">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          
-          {/* Logo Title */}
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 bg-emerald-500 rounded flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/10">
-              <Brain className="w-5.5 h-5.5 text-slate-950" strokeWidth={2.5} />
-            </div>
-            <div className="hidden sm:block">
-              <div className="flex items-center gap-3">
-                <h1 className="text-lg font-bold tracking-tight text-slate-100 font-display">Coherence™ Mission Control</h1>
-                <span className="text-[9px] font-mono font-bold bg-slate-900 px-2 py-0.5 border border-slate-800 rounded text-emerald-400">STABLE SESSION</span>
-              </div>
-              <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mt-0.5">Senior Clinical Systems Architect Console</p>
-            </div>
-          </div>
-
-          {/* View Switcher Tabs */}
-          <div className="flex bg-slate-900 border border-slate-800 rounded p-0.5" id="view-mode-tabs">
-            <button
-              onClick={() => setActiveView('cockpit')}
-              className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold tracking-wider uppercase transition-all cursor-pointer ${
-                activeView === 'cockpit'
-                  ? 'bg-emerald-500 text-slate-950 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Cockpit
-            </button>
-            <button
-              onClick={() => setActiveView('analytics')}
-              className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold tracking-wider uppercase transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeView === 'analytics'
-                  ? 'bg-emerald-500 text-slate-950 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Activity className="w-3 h-3" />
-              Analytics
-            </button>
-          </div>
-
-          {/* Clinician Profile details */}
-          <div className="flex items-center gap-5">
-            <div className="hidden sm:flex text-right flex-col">
-              <span className="text-xs font-semibold text-slate-300 font-sans">{currentUser.displayName || 'Clinician Admin'}</span>
-              <span className="text-[10px] font-mono text-slate-500 mt-0.5">MD, Neuro-Somatic Architect</span>
-            </div>
-            
-            {/* Sync Status Badge */}
-            <div className="flex items-center gap-1.5 bg-slate-900 px-3 py-1.5 rounded border border-slate-800 text-[10px] font-mono text-slate-400">
-              <Clock className="w-3.5 h-3.5 text-emerald-400" />
-              {syncStatus === 'saving' ? (
-                <span className="text-emerald-400 animate-pulse">SYNCING...</span>
-              ) : syncStatus === 'error' ? (
-                <span className="text-red-400">SYNC ERROR</span>
-              ) : (
-                <span className="text-slate-400 uppercase">FIREBASE ONLINE</span>
-              )}
-            </div>
-
-            <button
-              onClick={handleSignOut}
-              className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white rounded text-xs tracking-wider uppercase font-mono font-bold transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
-              title="Sign Out"
-            >
-              <LogOut className="w-3.5 h-3.5 text-slate-500" />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
-          </div>
-
-        </div>
-      </header>
+      <AppHeader
+        currentUser={currentUser}
+        activeView={activeView}
+        setActiveView={setActiveView}
+        syncStatus={syncStatus}
+      />
 
       {/* Dynamic Viewport Container */}
       {activeView === 'analytics' ? (
@@ -442,28 +195,10 @@ export default function App() {
                 <GenomeGrid activeOverrides={activeEncounter.activeOverrides} />
               </>
             ) : (
-              <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-16 text-center flex-1 flex flex-col items-center justify-center text-slate-400 shadow-md" id="cockpit-empty-state">
-                <Brain className="w-12 h-12 text-slate-700 animate-pulse mb-4" />
-                <h3 className="text-base font-bold text-slate-200 uppercase tracking-wide font-display">Awaiting Clinical Encounter</h3>
-                <p className="text-xs text-slate-500 max-w-sm mt-2 leading-relaxed">
-                  To initiate the 10-Engine Cortex sequence, create a new record from the archives or scan a patient pre-visit intake badge.
-                </p>
-                
-                <div className="flex gap-4 justify-center mt-8">
-                  <button
-                    onClick={() => handleStartNewEncounter()}
-                    className="py-2.5 px-5 bg-slate-800 hover:bg-slate-750 hover:border-slate-600 text-white font-mono font-bold text-xs uppercase tracking-wider rounded border border-slate-700 cursor-pointer shadow transition-all active:scale-95"
-                  >
-                    Create Blank Card
-                  </button>
-                  <button
-                    onClick={() => setShowBarcodeScanner(true)}
-                    className="py-2.5 px-5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-xs uppercase tracking-wider rounded cursor-pointer shadow transition-all active:scale-95"
-                  >
-                    Barcode Scan Pre-Visit Intake
-                  </button>
-                </div>
-              </div>
+              <CockpitEmptyState
+                onStartNewEncounter={() => handleStartNewEncounter()}
+                onBarcodeScanClick={() => setShowBarcodeScanner(true)}
+              />
             )}
           </section>
 
