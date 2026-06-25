@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { BARCODE_PATIENTS } from '../genomeData';
-import { Barcode, ScanLine, X, AlertCircle, RefreshCw } from 'lucide-react';
+import { Barcode, ScanLine, X, RefreshCw } from 'lucide-react';
 
 interface BarcodeScannerModalProps {
   onClose: () => void;
