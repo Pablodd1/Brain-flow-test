@@ -7,7 +7,7 @@ import React, { useState } from 'react';
 import { auth, db } from '../firebase';
 import { signInWithPopup, GoogleAuthProvider, signInAnonymously } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { Shield, Brain, Activity, User, HelpCircle, Key, ChevronRight } from 'lucide-react';
+import { Shield, Brain, Activity, Key, ChevronRight } from 'lucide-react';
 
 interface ClinicianAuthProps {
   onSuccess: (user: any) => void;
