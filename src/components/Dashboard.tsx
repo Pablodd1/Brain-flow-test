@@ -190,6 +190,14 @@ export default function Dashboard({
     }));
   }, [encounters]);
 
+  // Helper to format session duration cleanly
+  const formatDuration = (secondsVal: number) => {
+    if (secondsVal < 60) return `${secondsVal}s`;
+    const mins = Math.floor(secondsVal / 60);
+    const secs = secondsVal % 60;
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  };
+
   // 5. Filter list of all sessions in detailed grid
   const filteredSessions = useMemo(() => {
     return encounters.filter(e => {
@@ -198,16 +206,16 @@ export default function Dashboard({
                             e.preVisitIntake.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesStatus = statusFilter === 'all' || e.status === statusFilter;
       return matchesSearch && matchesStatus;
+    }).map(enc => {
+      let durationStr = "---";
+      if (enc.createdAt && enc.updatedAt) {
+        const seconds = Math.max(1, Math.round((enc.updatedAt.getTime() - enc.createdAt.getTime()) / 1000));
+        durationStr = formatDuration(seconds);
+      }
+      return { ...enc, durationStr };
     });
   }, [encounters, searchTerm, statusFilter]);
 
-  // Helper to format session duration cleanly
-  const formatDuration = (secondsVal: number) => {
-    if (secondsVal < 60) return `${secondsVal}s`;
-    const mins = Math.floor(secondsVal / 60);
-    const secs = secondsVal % 60;
-    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
-  };
 
   // Determine the most common override (Primary Triage)
   const topOverride = useMemo(() => {
@@ -1131,12 +1139,7 @@ export default function Dashboard({
                         </tr>
                       ) : (
                         filteredSessions.map((enc) => {
-                          // Calculate active duration
-                          let durationStr = "---";
-                          if (enc.createdAt && enc.updatedAt) {
-                            const seconds = Math.max(1, Math.round((enc.updatedAt.getTime() - enc.createdAt.getTime()) / 1000));
-                            durationStr = formatDuration(seconds);
-                          }
+                          const durationStr = enc.durationStr;
 
                           return (
                             <tr key={enc.id} className="hover:bg-slate-900/30 transition-colors group">
